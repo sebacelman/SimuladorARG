@@ -2,36 +2,34 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 
 st.set_page_config(page_title="UVA vs SPY", layout="wide")
 st.title("⚖️ Simulación: Cancelar Crédito UVA vs Invertir en S&P 500")
+
 # ==========================================
 # 1. EXTRACCIÓN AUTOMÁTICA DE DATOS
 # ==========================================
 @st.cache_data(ttl=3600) 
 def obtener_datos_macro():
     try:
-        # Extraemos el SPY
+        # Extraemos SPY
         spy = yf.Ticker("SPY")
         per_actual = spy.info.get('trailingPE', 24.0)
         
-        # Extraemos el tipo de cambio oficial ARS desde Yahoo Finance
-        # "USDARS=X" es el ticker del oficial
+        # Extraemos Dólar Oficial desde Yahoo Finance (Nunca falla por IP)
         usd_ars = yf.Ticker("USDARS=X").history(period="1d")
         oficial = float(usd_ars['Close'].iloc[-1])
         
-        # Extraemos el CCL (Usando el ADR de YPF o GGAL, proxy común)
-        # Ratio aproximado 1:10 (1 acción local = 10 ADRs)
-        # Pero para no complicar, usaremos un valor estimado de brecha 
-        # Si no podemos pegarle a DolarApi, le asignamos una brecha fija realista
-        brecha = 0.35 # 35% promedio
+        # Asignamos una brecha base del 35% si el usuario no la cambia
+        brecha = 0.35 
         ccl = oficial * (1 + brecha)
         
-        return per_actual, oficial, ccl, brecha, True, "OK"
-        
+        return per_actual, oficial, ccl, brecha, True
     except Exception as e:
-        return 24.0, 1432.5, 1432.5 * 1.35, 0.35, False, str(e)
+        return 24.0, 1000.0, 1350.0, 0.35, False
+
+per_spy, valor_oficial, valor_ccl, brecha_calculada, api_ok = obtener_datos_macro()
+
 # ==========================================
 # 2. INPUTS DEL USUARIO
 # ==========================================
@@ -40,13 +38,16 @@ flujo_mensual_usd = st.sidebar.number_input("Flujo Mensual Disponible (USD CCL)"
 saldo_uva = st.sidebar.number_input("Saldo de Deuda (UVAs)", value=47859)
 cuotas_restantes = st.sidebar.number_input("Cuotas Restantes", value=83)
 tna_credito = st.sidebar.number_input("Tasa Nominal Anual (%)", value=5.5, step=0.1) / 100
+
+st.sidebar.header("Variables Macroeconómicas")
 valor_uva_pesos = st.sidebar.number_input("Valor de 1 UVA hoy (ARS)", value=1200.0)
+# Dejamos que el usuario pueda forzar la brecha inicial si quiere
+brecha_inicial_usuario = st.sidebar.slider("Brecha Actual (CCL vs Oficial)", 0.0, 1.5, brecha_calculada, format="%.2f")
 
 st.sidebar.header("Motor Estadístico")
 distribucion = st.sidebar.selectbox(
     "Distribución del S&P 500", 
-    ["Normal (Clásica)", "T-Student (Colas Pesadas)"],
-    help="La T-Student simula una mayor probabilidad de crisis extremas (Cisnes Negros)."
+    ["Normal (Clásica)", "T-Student (Colas Pesadas)"]
 )
 
 iteraciones = 1000
@@ -54,29 +55,29 @@ meses_simulacion = 120
 anio_inicio = 2026
 
 # ==========================================
-# 3. TABLERO DE CONTROL (Transparencia de Datos)
+# 3. TABLERO DE CONTROL (Transparencia)
 # ==========================================
 if not api_ok:
-    st.error("⚠️ Error de conexión: No se pudieron descargar los datos en vivo. Verificá que la palabra 'requests' esté escrita en tu archivo requirements.txt en GitHub. Se están usando datos de simulación temporales.")
+    st.error("⚠️ Error de conexión. Usando datos de simulación temporales.")
 
-st.markdown("### 🔍 Datos Base del Modelo (Capturados en tiempo real)")
+st.markdown("### 🔍 Datos Base del Modelo")
 colA, colB, colC, colD = st.columns(4)
 
 valor_uva_usd_oficial = valor_uva_pesos / valor_oficial
 
-colA.metric("Dólar Oficial (Mayorista)", f"ARS {valor_oficial}")
-colB.metric("Dólar CCL", f"ARS {valor_ccl}")
-colC.metric("Brecha Cambiaria", f"{brecha_calculada*100:.1f}%")
+colA.metric("Dólar Oficial (Yahoo)", f"ARS {valor_oficial:,.2f}")
+colB.metric("Dólar CCL (Estimado)", f"ARS {valor_oficial * (1 + brecha_inicial_usuario):,.2f}")
+colC.metric("Brecha Inicial", f"{brecha_inicial_usuario*100:.1f}%")
 colD.metric("Costo 1 UVA (USD Oficial)", f"USD {valor_uva_usd_oficial:.2f}")
 
 crecimiento_real_g = 0.02
 inflacion_usd_i = 0.03
 mu_spy_anual = (1 / per_spy) + crecimiento_real_g + inflacion_usd_i
 
-st.info(f"**Valuación del S&P 500:** El PER actual extraído de Yahoo Finance es de **{per_spy:.2f}**. Usando la fórmula de Earnings Yield (1/PER + Crecimiento + Inflación), el motor utilizará un retorno nominal esperado del **{mu_spy_anual*100:.2f}% anual**.")
+st.info(f"**Valuación del S&P 500:** PER actual = **{per_spy:.2f}**. Retorno nominal esperado ajustado = **{mu_spy_anual*100:.2f}% anual**.")
 
 # ==========================================
-# 4. MOTOR MATEMÁTICO
+# 4. MOTOR MATEMÁTICO DE LA DEUDA
 # ==========================================
 if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     barra = st.progress(0)
@@ -94,7 +95,7 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     deuda_B = np.full(iteraciones, float(saldo_uva))
     rutas_costo_uva = np.zeros((iteraciones, meses_simulacion))
     
-    brecha_actual_arr = np.full(iteraciones, brecha_calculada)
+    brecha_actual_arr = np.full(iteraciones, brecha_inicial_usuario)
     velocidad_reversion_mensual = 0.1 
     
     for mes in range(1, meses_simulacion + 1):
@@ -112,14 +113,13 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
         costo_uva_usd_ccl = valor_uva_usd_oficial / (1 + brecha_actual_arr)
         rutas_costo_uva[:, mes-1] = costo_uva_usd_ccl
         
-        # --- Generación de Retornos según Distribución Elegida ---
+        # --- Generación de Retornos ---
         if distribucion == "Normal (Clásica)":
             retorno_spy = np.random.normal(mu_spy_mensual, vol_spy_mensual, iteraciones)
         else:
-            # T-Student con 4 grados de libertad (estándar para acciones). 
             retorno_spy = mu_spy_mensual + np.random.standard_t(df=4, size=iteraciones) * (vol_spy_mensual / np.sqrt(2))
         
-        # --- Escenario A ---
+        # --- Escenario A (Cuota + Invertir Resto) ---
         portafolio_A = portafolio_A * (1 + retorno_spy)
         deben_A = (deuda_A > 0)
         costo_cuota_usd = cuota_uva_fija * costo_uva_usd_ccl
@@ -127,7 +127,7 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
         deuda_A = np.where(deben_A, deuda_A - (cuota_uva_fija - (deuda_A * tasa_mensual_uva)), 0)
         portafolio_A += inversion_disponible_A
         
-        # --- Escenario B ---
+        # --- Escenario B (Adelantar a muerte + Invertir luego) ---
         portafolio_B = portafolio_B * (1 + retorno_spy)
         deben_B = (deuda_B > 0)
         uvas_comprables = flujo_mensual_usd / costo_uva_usd_ccl
