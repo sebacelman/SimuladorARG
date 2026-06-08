@@ -3,35 +3,45 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+# ==========================================
+# 1. CONFIGURACIÓN DE LA PÁGINA
+# ==========================================
 st.set_page_config(page_title="UVA vs SPY", layout="wide")
 st.title("⚖️ Simulación: Cancelar Crédito UVA vs Invertir en S&P 500")
 
 # ==========================================
-# 1. EXTRACCIÓN AUTOMÁTICA DE DATOS
+# 2. EXTRACCIÓN AUTOMÁTICA DE DATOS
 # ==========================================
 @st.cache_data(ttl=3600) 
 def obtener_datos_macro():
     try:
-        # Extraemos SPY
+        # 1. Extraemos SPY
         spy = yf.Ticker("SPY")
         per_actual = spy.info.get('trailingPE', 24.0)
         
-        # Extraemos Dólar Oficial desde Yahoo Finance (Nunca falla por IP)
+        # 2. Extraemos Dólar Oficial desde Yahoo Finance
         usd_ars = yf.Ticker("USDARS=X").history(period="1d")
         oficial = float(usd_ars['Close'].iloc[-1])
         
-        # Asignamos una brecha base del 35% si el usuario no la cambia
-        brecha = 0.35 
-        ccl = oficial * (1 + brecha)
+        # 3. Calculamos el CCL real usando el ADR de Grupo Galicia (Ratio 10:1)
+        ggal_ars = yf.Ticker("GGAL.BA").history(period="1d")
+        ggal_usd = yf.Ticker("GGAL").history(period="1d")
         
-        return per_actual, oficial, ccl, brecha, True
+        precio_ggal_ars = float(ggal_ars['Close'].iloc[-1])
+        precio_ggal_usd = float(ggal_usd['Close'].iloc[-1])
+        
+        ccl_calculado = (precio_ggal_ars * 10) / precio_ggal_usd
+        brecha_calculada = (ccl_calculado / oficial) - 1
+        
+        return per_actual, oficial, ccl_calculado, brecha_calculada, True
     except Exception as e:
+        # Valores de respaldo por si falla la conexión a Yahoo
         return 24.0, 1000.0, 1350.0, 0.35, False
 
 per_spy, valor_oficial, valor_ccl, brecha_calculada, api_ok = obtener_datos_macro()
 
 # ==========================================
-# 2. INPUTS DEL USUARIO
+# 3. INPUTS DEL USUARIO
 # ==========================================
 st.sidebar.header("Datos del Crédito y Flujo")
 flujo_mensual_usd = st.sidebar.number_input("Flujo Mensual Disponible (USD CCL)", value=2000)
@@ -41,7 +51,6 @@ tna_credito = st.sidebar.number_input("Tasa Nominal Anual (%)", value=5.5, step=
 
 st.sidebar.header("Variables Macroeconómicas")
 valor_uva_pesos = st.sidebar.number_input("Valor de 1 UVA hoy (ARS)", value=1200.0)
-# Dejamos que el usuario pueda forzar la brecha inicial si quiere
 brecha_inicial_usuario = st.sidebar.slider("Brecha Actual (CCL vs Oficial)", 0.0, 1.5, brecha_calculada, format="%.2f")
 
 st.sidebar.header("Motor Estadístico")
@@ -55,7 +64,7 @@ meses_simulacion = 120
 anio_inicio = 2026
 
 # ==========================================
-# 3. TABLERO DE CONTROL (Transparencia)
+# 4. TABLERO DE CONTROL (Transparencia)
 # ==========================================
 if not api_ok:
     st.error("⚠️ Error de conexión. Usando datos de simulación temporales.")
@@ -66,8 +75,8 @@ colA, colB, colC, colD = st.columns(4)
 valor_uva_usd_oficial = valor_uva_pesos / valor_oficial
 
 colA.metric("Dólar Oficial (Yahoo)", f"ARS {valor_oficial:,.2f}")
-colB.metric("Dólar CCL (Estimado)", f"ARS {valor_oficial * (1 + brecha_inicial_usuario):,.2f}")
-colC.metric("Brecha Inicial", f"{brecha_inicial_usuario*100:.1f}%")
+colB.metric("Dólar CCL (Vía ADR GGAL)", f"ARS {valor_ccl:,.2f}")
+colC.metric("Brecha Usada en Simulación", f"{brecha_inicial_usuario*100:.1f}%")
 colD.metric("Costo 1 UVA (USD Oficial)", f"USD {valor_uva_usd_oficial:.2f}")
 
 crecimiento_real_g = 0.02
@@ -77,7 +86,7 @@ mu_spy_anual = (1 / per_spy) + crecimiento_real_g + inflacion_usd_i
 st.info(f"**Valuación del S&P 500:** PER actual = **{per_spy:.2f}**. Retorno nominal esperado ajustado = **{mu_spy_anual*100:.2f}% anual**.")
 
 # ==========================================
-# 4. MOTOR MATEMÁTICO DE LA DEUDA
+# 5. MOTOR MATEMÁTICO DE LA DEUDA
 # ==========================================
 if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     barra = st.progress(0)
@@ -101,7 +110,7 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     for mes in range(1, meses_simulacion + 1):
         anio_actual = anio_inicio + (mes // 12)
         
-        # --- Lógica de Brecha ---
+        # --- Lógica de Brecha (Años pares vs impares) ---
         if anio_actual % 2 != 0:
             mu_brecha, vol_brecha = 0.70, 0.07 
         else:
@@ -119,7 +128,7 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
         else:
             retorno_spy = mu_spy_mensual + np.random.standard_t(df=4, size=iteraciones) * (vol_spy_mensual / np.sqrt(2))
         
-        # --- Escenario A (Cuota + Invertir Resto) ---
+        # --- Escenario A (Pagar Cuota + Invertir Resto) ---
         portafolio_A = portafolio_A * (1 + retorno_spy)
         deben_A = (deuda_A > 0)
         costo_cuota_usd = cuota_uva_fija * costo_uva_usd_ccl
@@ -146,7 +155,7 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     barra.empty()
     
     # ==========================================
-    # 5. RENDERIZADO DE RESULTADOS
+    # 6. RENDERIZADO DE RESULTADOS
     # ==========================================
     st.header(f"Patrimonio Neto tras 10 años")
     st.write("*(Asumiendo que aportás USD 2.000 mensuales incluso tras saldar la deuda)*")
