@@ -1,80 +1,118 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import yfinance as yf
+import requests
 
 st.set_page_config(page_title="UVA vs SPY", layout="wide")
 st.title("⚖️ Simulación: Cancelar Crédito UVA vs Invertir en S&P 500")
 
 # ==========================================
-# 1. INPUTS DEL USUARIO
+# 1. EXTRACCIÓN AUTOMÁTICA DE DATOS
+# ==========================================
+@st.cache_data(ttl=3600) 
+def obtener_datos_macro():
+    try:
+        spy = yf.Ticker("SPY")
+        per_actual = spy.info.get('trailingPE', 24.0)
+        
+        # DolarApi.com - Datos libres de Argentina
+        oficial = requests.get("https://dolarapi.com/v1/dolares/oficial").json()["venta"]
+        ccl = requests.get("https://dolarapi.com/v1/dolares/ccl").json()["venta"]
+        brecha = (ccl / oficial) - 1
+        
+        return per_actual, oficial, ccl, brecha
+    except Exception as e:
+        return 24.0, 1000, 1300, 0.30 # Fallbacks en caso de que las APIs fallen
+
+per_spy, valor_oficial, valor_ccl, brecha_calculada = obtener_datos_macro()
+
+# ==========================================
+# 2. INPUTS DEL USUARIO
 # ==========================================
 st.sidebar.header("Datos del Crédito y Flujo")
 flujo_mensual_usd = st.sidebar.number_input("Flujo Mensual Disponible (USD CCL)", value=2000)
 saldo_uva = st.sidebar.number_input("Saldo de Deuda (UVAs)", value=47859)
 cuotas_restantes = st.sidebar.number_input("Cuotas Restantes", value=83)
 tna_credito = st.sidebar.number_input("Tasa Nominal Anual (%)", value=5.5, step=0.1) / 100
+valor_uva_pesos = st.sidebar.number_input("Valor de 1 UVA hoy (ARS)", value=1200.0)
 
-st.sidebar.header("Variables Macroeconómicas")
-valor_uva_oficial = st.sidebar.number_input("Valor UVA en USD Oficial (Aprox)", value=1.15, step=0.05)
-brecha_actual = st.sidebar.slider("Brecha Actual", 0.0, 1.5, 0.30, format="%.2f")
+st.sidebar.header("Motor Estadístico")
+distribucion = st.sidebar.selectbox(
+    "Distribución del S&P 500", 
+    ["Normal (Clásica)", "T-Student (Colas Pesadas)"],
+    help="La T-Student simula una mayor probabilidad de crisis extremas (Cisnes Negros)."
+)
 
 iteraciones = 1000
-meses_simulacion = 120 # 10 años para ver el efecto post-cancelación
+meses_simulacion = 120 
 anio_inicio = 2026
 
 # ==========================================
-# 2. MOTOR MATEMÁTICO
+# 3. TABLERO DE CONTROL (Transparencia de Datos)
 # ==========================================
-if st.sidebar.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
+st.markdown("### 🔍 Datos Base del Modelo (Capturados en tiempo real)")
+colA, colB, colC, colD = st.columns(4)
+
+valor_uva_usd_oficial = valor_uva_pesos / valor_oficial
+
+colA.metric("Dólar Oficial", f"ARS {valor_oficial}")
+colB.metric("Dólar CCL", f"ARS {valor_ccl}")
+colC.metric("Brecha Cambiaria", f"{brecha_calculada*100:.1f}%")
+colD.metric("Costo 1 UVA (USD Oficial)", f"USD {valor_uva_usd_oficial:.2f}")
+
+crecimiento_real_g = 0.02
+inflacion_usd_i = 0.03
+mu_spy_anual = (1 / per_spy) + crecimiento_real_g + inflacion_usd_i
+
+st.info(f"**Valuación del S&P 500:** El PER actual extraído de Yahoo Finance es de **{per_spy:.2f}**. Usando la fórmula de Earnings Yield (1/PER + Crecimiento + Inflación), el motor utilizará un retorno nominal esperado del **{mu_spy_anual*100:.2f}% anual**.")
+
+# ==========================================
+# 4. MOTOR MATEMÁTICO
+# ==========================================
+if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     barra = st.progress(0)
     
-    # Parámetros mensuales
     tasa_mensual_uva = tna_credito / 12
-    
-    # Fórmula de cuota constante (Sistema Francés en UVAs)
     cuota_uva_fija = saldo_uva * (tasa_mensual_uva * (1 + tasa_mensual_uva)**cuotas_restantes) / ((1 + tasa_mensual_uva)**cuotas_restantes - 1)
     
-    # Parámetros SPY (Mensualizados)
-    mu_spy_mensual = 0.07 / 12
+    mu_spy_mensual = mu_spy_anual / 12
     vol_spy_mensual = 0.15 / np.sqrt(12)
     
-    # Matrices de resultados
-    portafolio_A = np.zeros(iteraciones) # Pagar cuota e invertir resto
-    portafolio_B = np.zeros(iteraciones) # Adelantar todo y luego invertir
+    portafolio_A = np.zeros(iteraciones) 
+    portafolio_B = np.zeros(iteraciones) 
     
-    # Matriz para rastrear la deuda y el costo de la UVA
     deuda_A = np.full(iteraciones, float(saldo_uva))
     deuda_B = np.full(iteraciones, float(saldo_uva))
-    rutas_costo_uva = np.zeros((iteraciones, meses_simulacion)) # NUEVA MATRIZ PARA EL GRÁFICO
+    rutas_costo_uva = np.zeros((iteraciones, meses_simulacion))
     
-    brecha_actual_arr = np.full(iteraciones, brecha_actual)
+    brecha_actual_arr = np.full(iteraciones, brecha_calculada)
     velocidad_reversion_mensual = 0.1 
     
     for mes in range(1, meses_simulacion + 1):
         anio_actual = anio_inicio + (mes // 12)
         
-        # --- 1. SIMULAR MACROECONOMÍA ---
+        # --- Lógica de Brecha ---
         if anio_actual % 2 != 0:
-            mu_brecha = 0.70 # Año Impar (Electoral)
-            vol_brecha = 0.07 
+            mu_brecha, vol_brecha = 0.70, 0.07 
         else:
-            mu_brecha = 0.25 # Año Par
-            vol_brecha = 0.03
+            mu_brecha, vol_brecha = 0.25, 0.03
             
-        shock = np.random.normal(0, vol_brecha, iteraciones)
-        cambio_brecha = velocidad_reversion_mensual * (mu_brecha - brecha_actual_arr) + shock
-        brecha_actual_arr = np.maximum(0.0, brecha_actual_arr + cambio_brecha)
+        shock_brecha = np.random.normal(0, vol_brecha, iteraciones)
+        brecha_actual_arr = np.maximum(0.0, brecha_actual_arr + velocidad_reversion_mensual * (mu_brecha - brecha_actual_arr) + shock_brecha)
         
-        # Costo de 1 UVA en dólares CCL este mes
-        costo_uva_usd_ccl = valor_uva_oficial / (1 + brecha_actual_arr)
-        
-        # GUARDAMOS EL COSTO PARA EL GRÁFICO
+        costo_uva_usd_ccl = valor_uva_usd_oficial / (1 + brecha_actual_arr)
         rutas_costo_uva[:, mes-1] = costo_uva_usd_ccl
         
-        # Rendimiento del S&P 500 este mes
-        retorno_spy = np.random.normal(mu_spy_mensual, vol_spy_mensual, iteraciones)
+        # --- Generación de Retornos según Distribución Elegida ---
+        if distribucion == "Normal (Clásica)":
+            retorno_spy = np.random.normal(mu_spy_mensual, vol_spy_mensual, iteraciones)
+        else:
+            # T-Student con 4 grados de libertad (estándar para acciones). 
+            # Se escala para que la volatilidad coincida con la paramétrica.
+            retorno_spy = mu_spy_mensual + np.random.standard_t(df=4, size=iteraciones) * (vol_spy_mensual / np.sqrt(2))
         
-        # --- 2. ESCENARIO A: Cuota Normal + SPY ---
+        # --- Escenario A ---
         portafolio_A = portafolio_A * (1 + retorno_spy)
         deben_A = (deuda_A > 0)
         costo_cuota_usd = cuota_uva_fija * costo_uva_usd_ccl
@@ -82,7 +120,7 @@ if st.sidebar.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
         deuda_A = np.where(deben_A, deuda_A - (cuota_uva_fija - (deuda_A * tasa_mensual_uva)), 0)
         portafolio_A += inversion_disponible_A
         
-        # --- 3. ESCENARIO B: Adelantar Capital a Muerte ---
+        # --- Escenario B ---
         portafolio_B = portafolio_B * (1 + retorno_spy)
         deben_B = (deuda_B > 0)
         uvas_comprables = flujo_mensual_usd / costo_uva_usd_ccl
@@ -101,7 +139,7 @@ if st.sidebar.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     barra.empty()
     
     # ==========================================
-    # 4. RESULTADOS (Mes 120 / Año 10)
+    # 5. RENDERIZADO DE RESULTADOS
     # ==========================================
     st.header(f"Patrimonio Neto tras 10 años")
     st.write("*(Asumiendo que aportás USD 2.000 mensuales incluso tras saldar la deuda)*")
@@ -122,22 +160,13 @@ if st.sidebar.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     
     st.markdown("---")
     if np.mean(diferencia) > 0:
-        st.success(f"🏆 **Conclusión del Modelo:** La Opción A (Invertir) te deja en promedio USD {np.mean(diferencia):,.0f} más. Gana en el {probabilidad_A_gana:.1f}% de los escenarios.")
+        st.success(f"🏆 **Conclusión:** La Opción A (Invertir) te deja en promedio USD {np.mean(diferencia):,.0f} más. Gana en el {probabilidad_A_gana:.1f}% de los escenarios.")
     else:
-        st.warning(f"🏆 **Conclusión del Modelo:** La Opción B (Adelantar) es superior, dejándote con USD {abs(np.mean(diferencia)):,.0f} extra en promedio. Gana en el {100-probabilidad_A_gana:.1f}% de los escenarios.")
+        st.warning(f"🏆 **Conclusión:** La Opción B (Adelantar) es superior por USD {abs(np.mean(diferencia)):,.0f} extra en promedio. Gana en el {100-probabilidad_A_gana:.1f}% de los escenarios.")
 
-    # ==========================================
-    # 5. VISUALIZACIÓN DE LA UVA EN CCL
-    # ==========================================
     st.markdown("---")
-    st.subheader("📉 Evolución del Costo de 1 UVA en Dólares CCL")
-    st.write("Muestra de 100 escenarios al azar a lo largo de los 120 meses. Observá cómo la ciclicidad electoral abarata la cuota en años impares.")
-    
-    # Tomamos 100 escenarios aleatorios de la matriz que creamos
+    st.subheader("📉 Evolución del Costo de 1 UVA en Dólares CCL (Muestra aleatoria)")
     indices_muestra = np.random.choice(iteraciones, 100, replace=False)
     df_uva = pd.DataFrame(rutas_costo_uva[indices_muestra, :].T)
-    
-    # Renombramos el índice para que el eje X vaya del Mes 1 al 120
     df_uva.index = range(1, meses_simulacion + 1)
-    
     st.line_chart(df_uva)
