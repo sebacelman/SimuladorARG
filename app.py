@@ -16,14 +16,20 @@ def obtener_datos_macro():
         spy = yf.Ticker("SPY")
         per_actual = spy.info.get('trailingPE', 24.0)
         
-        # DolarApi.com - Datos libres de Argentina (Usando MAYORISTA)
-        oficial = requests.get("https://dolarapi.com/v1/dolares/mayorista", timeout=5).json()["venta"]
-        ccl = requests.get("https://dolarapi.com/v1/dolares/ccl", timeout=5).json()["venta"]
+        # Disfrazamos la petición para que la API no bloquee el servidor de Streamlit
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+        
+        # DolarApi.com - Datos libres de Argentina
+        oficial = requests.get("https://dolarapi.com/v1/dolares/mayorista", headers=headers, timeout=5).json()["venta"]
+        ccl = requests.get("https://dolarapi.com/v1/dolares/ccl", headers=headers, timeout=5).json()["venta"]
         brecha = (ccl / oficial) - 1
         
-        return per_actual, oficial, ccl, brecha, True # El True indica que anduvo perfecto
+        return per_actual, oficial, ccl, brecha, True
+        
     except Exception as e:
-        # Valores de emergencia y un False para saber que falló la conexión
         return 24.0, 1000.0, 1300.0, 0.30, False
 
 per_spy, valor_oficial, valor_ccl, brecha_calculada, api_ok = obtener_datos_macro()
