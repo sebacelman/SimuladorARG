@@ -255,4 +255,4 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     dif_plata_A_vs_B = np.mean(portafolio_A) - np.mean(portafolio_B)
     
     st.write(f"Si comparás la **Opción A** con la **Opción B**, vas a ver que la Opción A te deja con una ventaja patrimonial, pero te obliga a cargar con el crédito durante todos los meses restantes. La Opción B te libera de la deuda **{meses_ahorrados_B} meses antes**.")
-    st.write(f"Esto significa que estás cobrando un 'premio' de aprox. USD {dif_plata_A_vs_B:,.0f} a cambio de asumir {meses_ahorrados_B} meses de riesgo inflacionario e incertidumbre laboral en Argentina. Para la mayoría de los perfiles de riesgo, **comprar esa tranquilidad adelantando capital tiene muchísimo sentido financiero y psicológico.**"))
+    st.write(f"Esto significa que estás cobrando un 'premio' de aprox. USD {dif_plata_A_vs_B:,.0f} a cambio de asumir {meses_ahorrados_B} meses de riesgo inflacionario e incertidumbre laboral en Argentina. Para la mayoría de los perfiles de riesgo, **comprar esa tranquilidad adelantando capital tiene muchísimo sentido financiero y psicológico.**")
