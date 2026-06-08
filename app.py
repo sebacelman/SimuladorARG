@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import plotly.graph_objects as go
 
 # ==========================================
 # 1. CONFIGURACIÓN DE LA PÁGINA
@@ -114,11 +115,14 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     mes_cancela_C = np.full(iteraciones, int(cuotas_restantes))
     mes_cancela_D = np.full(iteraciones, int(cuotas_restantes))
     
-    # Matrices para guardar historial mensual de deuda
     hist_deuda_A = np.zeros((iteraciones, meses_simulacion))
     hist_deuda_B = np.zeros((iteraciones, meses_simulacion))
     hist_deuda_C = np.zeros((iteraciones, meses_simulacion))
     hist_deuda_D = np.zeros((iteraciones, meses_simulacion))
+    
+    # Matrices para capturar las variables independientes del 3D
+    hist_brecha_completa = np.zeros((iteraciones, meses_simulacion))
+    hist_retornos_spy_completo = np.zeros((iteraciones, meses_simulacion))
     
     brecha_actual_arr = np.full(iteraciones, brecha_inicial_usuario)
     velocidad_reversion_mensual = 0.1 
@@ -136,12 +140,15 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         deuda_D_prev = np.copy(deuda_D)
         
         # --- Dinámica de Brecha ---
-        mu_brecha = np.where(es_par, objetivo_par, objetivo_impar)
+        mu_brecha = np.where(es_par, objetivo_par, objective_impar if 'objective_impar' in locals() else objetivo_impar)
         vol_brecha = 0.05 
             
         shock_brecha = np.random.normal(0, vol_brecha, iteraciones)
         brecha_actual_arr = np.maximum(0.0, brecha_actual_arr + velocidad_reversion_mensual * (mu_brecha - brecha_actual_arr) + shock_brecha)
         costo_uva_usd_ccl = valor_uva_usd_oficial / (1 + brecha_actual_arr)
+        
+        # Guardamos brecha de este mes
+        hist_brecha_completa[:, mes-1] = brecha_actual_arr
         
         # --- SPY ---
         if distribucion == "Normal (Clásica)":
@@ -149,6 +156,9 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         else:
             retorno_spy = mu_spy_mensual + np.random.standard_t(df=4, size=iteraciones) * (vol_spy_mensual / np.sqrt(2))
             
+        # Guardamos retorno de este mes
+        hist_retornos_spy_completo[:, mes-1] = retorno_spy
+        
         if (mes - 1) % 12 == 0:
             spy_inicio_anio = np.copy(spy_acum_index)
         spy_acum_index = spy_acum_index * (1 + retorno_spy)
@@ -213,7 +223,7 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         deuda_D = np.where(liquida_D, nuevo_deuda_D_liq, nuevo_deuda_D_no_liq)
         portafolio_D = np.where(liquida_D, nuevo_portafolio_D_liq, nuevo_portafolio_D_no_liq)
 
-        # --- Corrección y Guardado de Historial ---
+        # --- Guardado de Estados ---
         deuda_A = np.maximum(0, deuda_A)
         deuda_B = np.maximum(0, deuda_B)
         deuda_C = np.maximum(0, deuda_C)
@@ -233,60 +243,120 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         
     barra.empty()
     
-    # ==========================================
-    # 6. RENDERIZADO DE RESULTADOS
-    # ==========================================
+    # Procesamos las variables resumen para los ejes del gráfico 3D
+    st.session_state["hist_A"] = hist_deuda_A
+    st.session_state["hist_B"] = hist_deuda_B
+    st.session_state["hist_C"] = hist_deuda_C
+    st.session_state["hist_D"] = hist_deuda_D
+    
+    # Ejes X e Y del 3D
+    st.session_state["3d_x_brecha"] = np.mean(hist_brecha_completa, axis=1) * 100
+    st.session_state["3d_y_spy"] = np.mean(hist_retornos_spy_completo, axis=1) * 12 * 100
+    
+    # Eje Z (Capital Final al mes 120)
+    st.session_state["3d_z_A"] = portafolio_A
+    st.session_state["3d_z_B"] = portafolio_B
+    st.session_state["3d_z_C"] = portafolio_C
+    st.session_state["3d_z_D"] = portafolio_D
+    
+    st.session_state["simulacion_ejecutada"] = True
+
+# ==========================================
+# 6. RENDERIZADO DE RESULTADOS PRINCIPALES
+# ==========================================
+if "simulacion_ejecutada" in st.session_state and st.session_state["simulacion_ejecutada"]:
     st.markdown("---")
     st.header(f"Patrimonio y Exposición al Riesgo (10 años)")
+    
+    # Resúmenes rápidos extraídos de los estados guardados
+    p_A, p_B = st.session_state["3d_z_A"], st.session_state["3d_z_B"]
+    p_C, p_D = st.session_state["3d_z_C"], st.session_state["3d_z_D"]
     
     row1_col1, row1_col2 = st.columns(2)
     with row1_col1:
         st.subheader("Opción A: Invertir Resto")
-        st.metric("Patrimonio Promedio", f"USD {np.mean(portafolio_A):,.0f}")
-        st.error(f"⏳ Tiempo con Deuda: {int(np.mean(mes_cancela_A))} meses")
+        st.metric("Patrimonio Promedio", f"USD {np.mean(p_A):,.0f}")
         
     with row1_col2:
         st.subheader("Opción B: Adelanto Constante")
-        st.metric("Patrimonio Promedio", f"USD {np.mean(portafolio_B):,.0f}")
-        st.success(f"⏳ Tiempo con Deuda: {int(np.mean(mes_cancela_B))} meses")
+        st.metric("Patrimonio Promedio", f"USD {np.mean(p_B):,.0f}")
 
     st.markdown("<br>", unsafe_allow_html=True)
     
     row2_col1, row2_col2 = st.columns(2)
     with row2_col1:
         st.subheader("Opción C: Arbitraje Electoral (Billete)")
-        st.metric("Patrimonio Promedio", f"USD {np.mean(portafolio_C):,.0f}")
-        st.warning(f"⏳ Tiempo con Deuda: {int(np.mean(mes_cancela_C))} meses")
+        st.metric("Patrimonio Promedio", f"USD {np.mean(p_C):,.0f}")
 
     with row2_col2:
         st.subheader("Opción D: Arbitraje Inteligente (SPY)")
-        st.metric("Patrimonio Promedio", f"USD {np.mean(portafolio_D):,.0f}")
-        st.info(f"⏳ Tiempo con Deuda: {int(np.mean(mes_cancela_D))} meses")
-        
-    # Guardamos los historiales en Session State para que no se borren al interactuar con el selector
-    st.session_state["hist_A"] = hist_deuda_A
-    st.session_state["hist_B"] = hist_deuda_B
-    st.session_state["hist_C"] = hist_deuda_C
-    st.session_state["hist_D"] = hist_deuda_D
-    st.session_state["simulacion_ejecutada"] = True
+        st.metric("Patrimonio Promedio", f"USD {np.mean(p_D):,.0f}")
 
-# ==========================================
-# 7. ANÁLISIS MENSUAL DETALLADO
-# ==========================================
-if "simulacion_ejecutada" in st.session_state and st.session_state["simulacion_ejecutada"]:
+    # ==========================================
+    # 7. NUEVA SECCIÓN: MAPA TRIDIMENSIONAL DEL CAPITAL
+    # ==========================================
+    st.markdown("---")
+    st.header("🌌 Mapa de Sensibilidad 3D (Montecarlo)")
+    st.write("Cada punto representa una simulación completa de 10 años. Podés mantener presionado el click para rotar el gráfico y analizar la inclinación del riesgo.")
+    
+    estrategia_3d = st.selectbox(
+        "Seleccioná la Estrategia para visualizar en 3D:",
+        ["Opción A (Inversión Pura)", "Opción B (Adelanto Constante)", "Opción C (Arbitraje Billete)", "Opción D (Arbitraje SPY Inteligente)"]
+    )
+    
+    # Asignamos el eje Z según lo elegido
+    if "Opción A" in estrategia_3d:
+        z_data = st.session_state["3d_z_A"]
+    elif "Opción B" in estrategia_3d:
+        z_data = st.session_state["3d_z_B"]
+    elif "Opción C" in estrategia_3d:
+        z_data = st.session_state["3d_z_C"]
+    else:
+        z_data = st.session_state["3d_z_D"]
+        
+    # Construcción del objeto de Plotly
+    fig_3d = go.Figure(data=[go.Scatter3d(
+        x=st.session_state["3d_x_brecha"],
+        y=st.session_state["3d_y_spy"],
+        z=z_data,
+        mode='markers',
+        marker=dict(
+            size=3.5,
+            color=z_data,                # El color cambia según la riqueza final
+            colorscale='Viridis',        # Escala cromática fluida
+            opacity=0.8,
+            showscale=True,
+            colorbar=dict(title="USD Final", thickness=15)
+        )
+    )])
+    
+    fig_3d.update_layout(
+        scene=dict(
+            xaxis_title='Brecha Promedio Anual (%)',
+            yaxis_title='Retorno SPY Anualizado (%)',
+            zaxis_title='Capital Final (USD)'
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        height=650
+    )
+    
+    st.plotly_chart(fig_3d, use_container_width=True)
+
+    # ==========================================
+    # 8. ANÁLISIS MENSUAL DETALLADO
+    # ==========================================
     st.markdown("---")
     st.header("🔎 Evolución Mensual de la Deuda")
-    st.write("Explorá cómo disminuye el saldo de tu deuda mes a mes según la estrategia y el escenario aleatorio (iteración) que elijas.")
     
     col_sel_1, col_sel_2 = st.columns(2)
     with col_sel_1:
         estrategia_elegida = st.selectbox(
-            "Seleccioná la Estrategia:",
-            ["Opción A (Invertir Resto)", "Opción B (Adelanto Constante)", "Opción C (Arbitraje Billete)", "Opción D (Arbitraje SPY)"]
+            "Seleccioná la Estrategia para ver mes a mes:",
+            ["Opción A", "Opción B", "Opción C", "Opción D"]
         )
     with col_sel_2:
         escenario_elegido = st.number_input(
-            f"Seleccioná el Escenario (1 a {iteraciones}):",
+            f"Seleccioná el Universo/Escenario Específico (1 a {iteraciones}):",
             min_value=1, max_value=iteraciones, value=1
         )
         
@@ -307,11 +377,9 @@ if "simulacion_ejecutada" in st.session_state and st.session_state["simulacion_e
     }).set_index("Mes")
     
     col_grafico, col_tabla = st.columns([2, 1])
-    
     with col_grafico:
-        st.subheader(f"Gráfico: Escenario {escenario_elegido}")
+        st.subheader(f"Gráfico: Evolución en Escenario {escenario_elegido}")
         st.line_chart(df_mensual)
-        
     with col_tabla:
         st.subheader("Tabla de Saldos")
         st.dataframe(df_mensual, use_container_width=True, height=400)
