@@ -114,12 +114,15 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     mes_cancela_C = np.full(iteraciones, int(cuotas_restantes))
     mes_cancela_D = np.full(iteraciones, int(cuotas_restantes))
     
+    # Matrices para guardar historial mensual de deuda
+    hist_deuda_A = np.zeros((iteraciones, meses_simulacion))
+    hist_deuda_B = np.zeros((iteraciones, meses_simulacion))
+    hist_deuda_C = np.zeros((iteraciones, meses_simulacion))
+    hist_deuda_D = np.zeros((iteraciones, meses_simulacion))
+    
     brecha_actual_arr = np.full(iteraciones, brecha_inicial_usuario)
     velocidad_reversion_mensual = 0.1 
     
-    # --- MODELADO ESTOCÁSTICO DE OBJETIVOS DE BRECHA ---
-    # En lugar de ser fijos, cada una de las 1000 iteraciones saca su "objetivo macroeconómico" de una distribución normal.
-    # Usamos np.maximum para evitar que los desvíos generen brechas negativas irreales.
     objetivo_par = np.maximum(0.0, np.random.normal(mu_par_hist, std_par_hist, iteraciones))
     objetivo_impar = np.maximum(0.0, np.random.normal(mu_impar_hist, std_impar_hist, iteraciones))
     
@@ -133,9 +136,8 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         deuda_D_prev = np.copy(deuda_D)
         
         # --- Dinámica de Brecha ---
-        # El objetivo (mu_brecha) ahora depende de la distribución estocástica asignada a esa iteración específica
         mu_brecha = np.where(es_par, objetivo_par, objetivo_impar)
-        vol_brecha = 0.05 # Volatilidad intrínseca mensual
+        vol_brecha = 0.05 
             
         shock_brecha = np.random.normal(0, vol_brecha, iteraciones)
         brecha_actual_arr = np.maximum(0.0, brecha_actual_arr + velocidad_reversion_mensual * (mu_brecha - brecha_actual_arr) + shock_brecha)
@@ -211,7 +213,7 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         deuda_D = np.where(liquida_D, nuevo_deuda_D_liq, nuevo_deuda_D_no_liq)
         portafolio_D = np.where(liquida_D, nuevo_portafolio_D_liq, nuevo_portafolio_D_no_liq)
 
-        # --- Detector de Cancelación ---
+        # --- Corrección y Guardado de Historial ---
         deuda_A = np.maximum(0, deuda_A)
         deuda_B = np.maximum(0, deuda_B)
         deuda_C = np.maximum(0, deuda_C)
@@ -222,6 +224,11 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         mes_cancela_C = np.where((deuda_C_prev > 0) & (deuda_C == 0), mes, mes_cancela_C)
         mes_cancela_D = np.where((deuda_D_prev > 0) & (deuda_D == 0), mes, mes_cancela_D)
 
+        hist_deuda_A[:, mes-1] = deuda_A
+        hist_deuda_B[:, mes-1] = deuda_B
+        hist_deuda_C[:, mes-1] = deuda_C
+        hist_deuda_D[:, mes-1] = deuda_D
+
         barra.progress(mes / meses_simulacion)
         
     barra.empty()
@@ -231,7 +238,6 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     # ==========================================
     st.markdown("---")
     st.header(f"Patrimonio y Exposición al Riesgo (10 años)")
-    st.write("*(El tiempo de cancelación mide tu exposición a shocks macroeconómicos en Argentina)*")
     
     row1_col1, row1_col2 = st.columns(2)
     with row1_col1:
@@ -257,10 +263,55 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         st.metric("Patrimonio Promedio", f"USD {np.mean(portafolio_D):,.0f}")
         st.info(f"⏳ Tiempo con Deuda: {int(np.mean(mes_cancela_D))} meses")
         
+    # Guardamos los historiales en Session State para que no se borren al interactuar con el selector
+    st.session_state["hist_A"] = hist_deuda_A
+    st.session_state["hist_B"] = hist_deuda_B
+    st.session_state["hist_C"] = hist_deuda_C
+    st.session_state["hist_D"] = hist_deuda_D
+    st.session_state["simulacion_ejecutada"] = True
+
+# ==========================================
+# 7. ANÁLISIS MENSUAL DETALLADO
+# ==========================================
+if "simulacion_ejecutada" in st.session_state and st.session_state["simulacion_ejecutada"]:
     st.markdown("---")
-    st.subheader("⚖️ Conclusión Cuantitativa del Riesgo")
-    meses_ahorrados_B = int(np.mean(mes_cancela_A) - np.mean(mes_cancela_B))
-    dif_plata_A_vs_B = np.mean(portafolio_A) - np.mean(portafolio_B)
+    st.header("🔎 Evolución Mensual de la Deuda")
+    st.write("Explorá cómo disminuye el saldo de tu deuda mes a mes según la estrategia y el escenario aleatorio (iteración) que elijas.")
     
-    st.write(f"Si comparás la **Opción A** con la **Opción B**, vas a ver que la Opción A te deja con una ventaja patrimonial, pero te obliga a cargar con el crédito durante todos los meses restantes. La Opción B te libera de la deuda **{meses_ahorrados_B} meses antes**.")
-    st.write(f"Esto significa que estás cobrando un 'premio' de aprox. USD {dif_plata_A_vs_B:,.0f} a cambio de asumir {meses_ahorrados_B} meses de riesgo inflacionario e incertidumbre laboral en Argentina. Para la mayoría de los perfiles de riesgo, **comprar esa tranquilidad adelantando capital tiene muchísimo sentido financiero y psicológico.**")
+    col_sel_1, col_sel_2 = st.columns(2)
+    with col_sel_1:
+        estrategia_elegida = st.selectbox(
+            "Seleccioná la Estrategia:",
+            ["Opción A (Invertir Resto)", "Opción B (Adelanto Constante)", "Opción C (Arbitraje Billete)", "Opción D (Arbitraje SPY)"]
+        )
+    with col_sel_2:
+        escenario_elegido = st.number_input(
+            f"Seleccioná el Escenario (1 a {iteraciones}):",
+            min_value=1, max_value=iteraciones, value=1
+        )
+        
+    indice_esc = escenario_elegido - 1
+    
+    if "Opción A" in estrategia_elegida:
+        datos_hist = st.session_state["hist_A"][indice_esc, :]
+    elif "Opción B" in estrategia_elegida:
+        datos_hist = st.session_state["hist_B"][indice_esc, :]
+    elif "Opción C" in estrategia_elegida:
+        datos_hist = st.session_state["hist_C"][indice_esc, :]
+    else:
+        datos_hist = st.session_state["hist_D"][indice_esc, :]
+        
+    df_mensual = pd.DataFrame({
+        "Mes": range(1, meses_simulacion + 1),
+        "Saldo Restante (UVAs)": datos_hist
+    }).set_index("Mes")
+    
+    col_grafico, col_tabla = st.columns([2, 1])
+    
+    with col_grafico:
+        st.subheader(f"Gráfico: Escenario {escenario_elegido}")
+        st.line_chart(df_mensual)
+        
+    with col_tabla:
+        st.subheader("Tabla de Saldos")
+        st.dataframe(df_mensual, use_container_width=True, height=400)
