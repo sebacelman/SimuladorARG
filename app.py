@@ -102,8 +102,8 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     spy_acum_index = np.ones(iteraciones)
     spy_inicio_anio = np.ones(iteraciones)
     
-    # Matrices para guardar en qué mes se cancela la deuda
-    mes_cancela_A = np.full(iteraciones, int(cuotas_restantes)) # La Opción A siempre tarda las cuotas restantes
+    # Inicializamos el contador de meses en el máximo posible
+    mes_cancela_A = np.full(iteraciones, int(cuotas_restantes)) 
     mes_cancela_B = np.full(iteraciones, int(cuotas_restantes))
     mes_cancela_C = np.full(iteraciones, int(cuotas_restantes))
     mes_cancela_D = np.full(iteraciones, int(cuotas_restantes))
@@ -114,6 +114,12 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     for mes in range(1, meses_simulacion + 1):
         anio_actual = anio_inicio + (mes // 12)
         es_par = (anio_actual % 2 == 0)
+        
+        # Guardamos foto de la deuda al INICIO del mes para el detector de cancelación
+        deuda_A_prev = np.copy(deuda_A)
+        deuda_B_prev = np.copy(deuda_B)
+        deuda_C_prev = np.copy(deuda_C)
+        deuda_D_prev = np.copy(deuda_D)
         
         # --- Macro ---
         if not es_par:
@@ -150,10 +156,6 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         amortizacion_B = (flujo_mensual_usd / costo_uva_usd_ccl) - (deuda_B * tasa_mensual_uva)
         cancela_B = deben_B & (amortizacion_B >= deuda_B)
         
-        # Guardamos el mes si justo canceló
-        mes_cancela_B = np.where(cancela_B, mes, mes_cancela_B)
-        
-        deuda_B_prev = np.copy(deuda_B)
         deuda_B = np.where(deben_B & ~cancela_B, deuda_B - amortizacion_B, 0)
         inv_disp_B = np.where(cancela_B, (amortizacion_B - deuda_B_prev) * costo_uva_usd_ccl, 0)
         inv_disp_B = np.where(~deben_B & ~cancela_B, flujo_mensual_usd, inv_disp_B)
@@ -172,9 +174,6 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
             amort_extra_C = (fondos_disp_C / costo_uva_usd_ccl) - (deuda_C * tasa_mensual_uva)
             cancela_C = deben_C & (amort_extra_C >= deuda_C)
             
-            mes_cancela_C = np.where(cancela_C, mes, mes_cancela_C)
-            
-            deuda_C_prev = np.copy(deuda_C)
             deuda_C = np.where(deben_C & ~cancela_C, deuda_C - amort_extra_C, 0)
             inv_disp_C = np.where(cancela_C, (amort_extra_C - deuda_C_prev) * costo_uva_usd_ccl, 0)
             inv_disp_C = np.where(~deben_C & ~cancela_C, flujo_mensual_usd, inv_disp_C)
@@ -196,15 +195,24 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         amort_extra_D = (fondos_disp_D / costo_uva_usd_ccl) - interes_D
         cancela_D = amort_extra_D >= deuda_D
         
-        # Filtramos quién cancela realmente (tiene que cumplir liquida_D y cancela_D)
-        cancela_real_D = liquida_D & cancela_D
-        mes_cancela_D = np.where(cancela_real_D, mes, mes_cancela_D)
-        
         nuevo_deuda_D_liq = np.where(cancela_D, 0, deuda_D - amort_extra_D)
-        nuevo_portafolio_D_liq = np.where(cancela_D, (amort_extra_D - deuda_D) * costo_uva_usd_ccl, 0)
+        nuevo_portafolio_D_liq = np.where(cancela_D, (amort_extra_D - deuda_D_prev) * costo_uva_usd_ccl, 0)
         
         deuda_D = np.where(liquida_D, nuevo_deuda_D_liq, nuevo_deuda_D_no_liq)
         portafolio_D = np.where(liquida_D, nuevo_portafolio_D_liq, nuevo_portafolio_D_no_liq)
+
+        # --- DETECTOR INFALIBLE DE CANCELACIÓN ---
+        # Evitamos saldos negativos matemáticos
+        deuda_A = np.maximum(0, deuda_A)
+        deuda_B = np.maximum(0, deuda_B)
+        deuda_C = np.maximum(0, deuda_C)
+        deuda_D = np.maximum(0, deuda_D)
+        
+        # Si el mes pasado debían y ahora deben 0, este es el mes exacto en que se liberaron
+        mes_cancela_A = np.where((deuda_A_prev > 0) & (deuda_A == 0), mes, mes_cancela_A)
+        mes_cancela_B = np.where((deuda_B_prev > 0) & (deuda_B == 0), mes, mes_cancela_B)
+        mes_cancela_C = np.where((deuda_C_prev > 0) & (deuda_C == 0), mes, mes_cancela_C)
+        mes_cancela_D = np.where((deuda_D_prev > 0) & (deuda_D == 0), mes, mes_cancela_D)
 
         barra.progress(mes / meses_simulacion)
         
@@ -247,4 +255,4 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     dif_plata_A_vs_B = np.mean(portafolio_A) - np.mean(portafolio_B)
     
     st.write(f"Si comparás la **Opción A** con la **Opción B**, vas a ver que la Opción A te deja con una ventaja patrimonial, pero te obliga a cargar con el crédito durante todos los meses restantes. La Opción B te libera de la deuda **{meses_ahorrados_B} meses antes**.")
-    st.write(f"Esto significa que estás cobrando un 'premio' de aprox. USD {dif_plata_A_vs_B:,.0f} a cambio de asumir {meses_ahorrados_B} meses de riesgo inflacionario e incertidumbre laboral en Argentina. Para la mayoría de los perfiles de riesgo, **comprar esa tranquilidad adelantando capital tiene muchísimo sentido financiero y psicológico.**")
+    st.write(f"Esto significa que estás cobrando un 'premio' de aprox. USD {dif_plata_A_vs_B:,.0f} a cambio de asumir {meses_ahorrados_B} meses de riesgo inflacionario e incertidumbre laboral en Argentina. Para la mayoría de los perfiles de riesgo, **comprar esa tranquilidad adelantando capital tiene muchísimo sentido financiero y psicológico.**"))
