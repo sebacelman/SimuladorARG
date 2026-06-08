@@ -6,7 +6,7 @@ import yfinance as yf
 # ==========================================
 # 1. CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
-st.set_page_config(page_title="UVA vs SPY", layout="wide")
+st.set_page_config(page_title="UVA vs SPY", layout="wide", initial_sidebar_state="expanded")
 st.title("⚖️ Simulación Dinámica: Estrategias UVA vs SPY")
 
 # ==========================================
@@ -47,6 +47,13 @@ tna_credito = st.sidebar.number_input("Tasa Nominal Anual (%)", value=5.5, step=
 st.sidebar.header("Variables Macroeconómicas")
 valor_uva_pesos = st.sidebar.number_input("Valor de 1 UVA hoy (ARS)", value=1980.80)
 brecha_inicial_usuario = st.sidebar.slider("Brecha Actual (CCL vs Oficial)", 0.0, 1.5, brecha_calculada, format="%.2f")
+
+st.sidebar.header("Comportamiento Histórico Brecha")
+st.markdown("<small>Media y Desvío Estándar para la distribución del objetivo de brecha.</small>", unsafe_allow_html=True)
+mu_par_hist = st.sidebar.number_input("Media Año Par (%)", value=35.0, step=1.0) / 100
+std_par_hist = st.sidebar.number_input("Desvío Año Par (%)", value=5.0, step=1.0) / 100
+mu_impar_hist = st.sidebar.number_input("Media Año Impar (%)", value=90.0, step=1.0) / 100
+std_impar_hist = st.sidebar.number_input("Desvío Año Impar (%)", value=15.0, step=1.0) / 100
 
 st.sidebar.header("Motor Estadístico")
 distribucion = st.sidebar.selectbox(
@@ -102,7 +109,6 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     spy_acum_index = np.ones(iteraciones)
     spy_inicio_anio = np.ones(iteraciones)
     
-    # Inicializamos el contador de meses en el máximo posible
     mes_cancela_A = np.full(iteraciones, int(cuotas_restantes)) 
     mes_cancela_B = np.full(iteraciones, int(cuotas_restantes))
     mes_cancela_C = np.full(iteraciones, int(cuotas_restantes))
@@ -111,21 +117,25 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
     brecha_actual_arr = np.full(iteraciones, brecha_inicial_usuario)
     velocidad_reversion_mensual = 0.1 
     
+    # --- MODELADO ESTOCÁSTICO DE OBJETIVOS DE BRECHA ---
+    # En lugar de ser fijos, cada una de las 1000 iteraciones saca su "objetivo macroeconómico" de una distribución normal.
+    # Usamos np.maximum para evitar que los desvíos generen brechas negativas irreales.
+    objetivo_par = np.maximum(0.0, np.random.normal(mu_par_hist, std_par_hist, iteraciones))
+    objetivo_impar = np.maximum(0.0, np.random.normal(mu_impar_hist, std_impar_hist, iteraciones))
+    
     for mes in range(1, meses_simulacion + 1):
         anio_actual = anio_inicio + (mes // 12)
         es_par = (anio_actual % 2 == 0)
         
-        # Guardamos foto de la deuda al INICIO del mes para el detector de cancelación
         deuda_A_prev = np.copy(deuda_A)
         deuda_B_prev = np.copy(deuda_B)
         deuda_C_prev = np.copy(deuda_C)
         deuda_D_prev = np.copy(deuda_D)
         
-        # --- Macro ---
-        if not es_par:
-            mu_brecha, vol_brecha = 0.70, 0.07 
-        else:
-            mu_brecha, vol_brecha = 0.25, 0.03 
+        # --- Dinámica de Brecha ---
+        # El objetivo (mu_brecha) ahora depende de la distribución estocástica asignada a esa iteración específica
+        mu_brecha = np.where(es_par, objetivo_par, objetivo_impar)
+        vol_brecha = 0.05 # Volatilidad intrínseca mensual
             
         shock_brecha = np.random.normal(0, vol_brecha, iteraciones)
         brecha_actual_arr = np.maximum(0.0, brecha_actual_arr + velocidad_reversion_mensual * (mu_brecha - brecha_actual_arr) + shock_brecha)
@@ -201,14 +211,12 @@ if st.button("🚀 Simular Estrategias (10 Años)", type="primary"):
         deuda_D = np.where(liquida_D, nuevo_deuda_D_liq, nuevo_deuda_D_no_liq)
         portafolio_D = np.where(liquida_D, nuevo_portafolio_D_liq, nuevo_portafolio_D_no_liq)
 
-        # --- DETECTOR INFALIBLE DE CANCELACIÓN ---
-        # Evitamos saldos negativos matemáticos
+        # --- Detector de Cancelación ---
         deuda_A = np.maximum(0, deuda_A)
         deuda_B = np.maximum(0, deuda_B)
         deuda_C = np.maximum(0, deuda_C)
         deuda_D = np.maximum(0, deuda_D)
         
-        # Si el mes pasado debían y ahora deben 0, este es el mes exacto en que se liberaron
         mes_cancela_A = np.where((deuda_A_prev > 0) & (deuda_A == 0), mes, mes_cancela_A)
         mes_cancela_B = np.where((deuda_B_prev > 0) & (deuda_B == 0), mes, mes_cancela_B)
         mes_cancela_C = np.where((deuda_C_prev > 0) & (deuda_C == 0), mes, mes_cancela_C)
