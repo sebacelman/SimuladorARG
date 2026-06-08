@@ -1,0 +1,2 @@
+# SimuladorARG
+Simulador de alternativas
