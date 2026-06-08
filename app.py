@@ -156,4 +156,20 @@ if st.button("🚀 Simular 10 Años (Mes a Mes)", type="primary"):
     with col2:
         st.subheader("Opción B: Adelantar Capital + Invertir")
         st.metric("Promedio Esperado", f"USD {np.mean(portafolio_B):,.0f}")
-        st.write(f"Peor Escenario (P5): USD {np.
+        st.write(f"Peor Escenario (P5): USD {np.percentile(portafolio_B, 5):,.0f}")
+        
+    diferencia = portafolio_A - portafolio_B
+    probabilidad_A_gana = np.sum(diferencia > 0) / iteraciones * 100
+    
+    st.markdown("---")
+    if np.mean(diferencia) > 0:
+        st.success(f"🏆 **Conclusión:** La Opción A (Invertir) te deja en promedio USD {np.mean(diferencia):,.0f} más. Gana en el {probabilidad_A_gana:.1f}% de los escenarios.")
+    else:
+        st.warning(f"🏆 **Conclusión:** La Opción B (Adelantar) es superior por USD {abs(np.mean(diferencia)):,.0f} extra en promedio. Gana en el {100-probabilidad_A_gana:.1f}% de los escenarios.")
+
+    st.markdown("---")
+    st.subheader("📉 Evolución del Costo de 1 UVA en Dólares CCL (Muestra aleatoria)")
+    indices_muestra = np.random.choice(iteraciones, 100, replace=False)
+    df_uva = pd.DataFrame(rutas_costo_uva[indices_muestra, :].T)
+    df_uva.index = range(1, meses_simulacion + 1)
+    st.line_chart(df_uva)
